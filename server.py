@@ -1,8 +1,13 @@
+import os
+
+from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request
 from flask.views import MethodView
 from flask_bcrypt import Bcrypt
+from flask_login import LoginManager, current_user, login_required
 from sqlalchemy.exc import IntegrityError
 
+from auth_view import AuthView
 from db import Posting, Session, User
 from errors import HttpError
 from schema import (
@@ -14,7 +19,23 @@ from schema import (
     validate_posting,
 )
 
+load_dotenv()
+
 app = Flask("app")
+app.config['SECRET_KEY'] = os.getenv("SECRET_KEY")
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+
+@login_manager.user_loader
+def load_user(user_id):
+    session = Session()
+    try:
+        return session.get(User, int(user_id))
+    except (ValueError, TypeError):
+        return None
+    finally:
+        session.close()
 
 bcrypt = Bcrypt(app)
 
@@ -53,12 +74,19 @@ def get_user(user_id: int) -> User:
 
 
 def add_user(user: User):
-    request.session.rollback()
     request.session.add(user)
     try:
         request.session.commit()
     except IntegrityError:
         raise HttpError("User already exists", 409)
+
+
+# def update_user(user: User):
+#     request.session.add(user)
+#     try:
+#         request.session.commit()
+#     except IntegrityError:
+#         raise HttpError("User already exists", 409)
 
 
 class UserView(MethodView):
@@ -76,19 +104,25 @@ class UserView(MethodView):
         add_user(user)
         return jsonify(user.user_dict)
 
+    @login_required
     def patch(self, user_id):
         json_data = validate(request.json, UpdateUser)
         user = get_user(user_id)
-
-        if "username" in json_data:
+        if current_user.id != user.id:
+            raise HttpError("Это не Ваш профиль", 403)
+        if "username" in json_data and json_data["username"]:
             user.username = json_data["username"]
-        if "password" in json_data:
+        if "password" in json_data and json_data["password"]:
             user.password = hash_password(json_data["password"])
+        if "email" in json_data and json_data["email"]:
+            user.email = json_data["email"]
         add_user(user)
         return jsonify(user.user_dict)
 
     def delete(self, user_id):
         user = get_user(user_id)
+        if current_user.id != user.id:
+            raise HttpError("Это не Ваш профиль", 403)
         request.session.delete(user)
         request.session.commit()
         return jsonify({"message": "User deleted"})
@@ -125,7 +159,7 @@ class PostingView(MethodView):
         json_data = validate_posting(request.json, UpdatePosting, request.session)
         posting = get_posting(posting_id)
 
-        if posting.owner_id != json_data["owner_id"]:
+        if current_user.id != posting.owner_id:
             raise HttpError("Это не Ваше объявление", 403)
         if "heading" in json_data:
             posting.heading = json_data["heading"]
@@ -136,9 +170,8 @@ class PostingView(MethodView):
         return jsonify(posting.posting_dict)
 
     def delete(self, posting_id):
-        json_data = validate_posting(request.json, UpdatePosting, request.session)
         posting = get_posting(posting_id)
-        if posting.owner_id != json_data["owner_id"]:
+        if current_user.id != posting.owner_id:
             raise HttpError("Это не Ваше объявление", 403)
         request.session.delete(posting)
         request.session.commit()
@@ -160,5 +193,9 @@ app.add_url_rule("/users", view_func=user_view, methods=["POST"])
 app.add_url_rule(
     "/users/<int:user_id>", view_func=user_view, methods=["GET", "PATCH", "DELETE"]
 )
+
+auth_view = AuthView.as_view('auth')
+app.add_url_rule("/login", view_func=auth_view, methods=['POST', 'DELETE'])
+
 
 app.run()

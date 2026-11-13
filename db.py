@@ -2,6 +2,7 @@ import atexit
 import datetime
 import os
 
+from flask_login import UserMixin
 from sqlalchemy import DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.engine import create_engine
 from sqlalchemy.orm import (
@@ -37,7 +38,7 @@ class Base(DeclarativeBase):
 
 
 # 1. Модель пользователя
-class User(Base):
+class User(UserMixin, Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String, unique=True)
